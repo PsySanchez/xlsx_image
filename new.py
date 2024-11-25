@@ -10,6 +10,7 @@ def process_images(image_folder, output_folder, barcode_column="barcode"):
     # Locate the first Excel file in the current directory or set to None if not found
     xlsx_file = next((file for file in os.listdir() if file.endswith(".xlsx")), None)
     worksheet = None
+    dynamic_output_folder = None
 
     if xlsx_file:
         # Load the Excel workbook and active sheet
@@ -24,12 +25,13 @@ def process_images(image_folder, output_folder, barcode_column="barcode"):
     else:
         print("No Excel file found. Proceeding without barcode matching.")
 
-    # Create output folders
-    # os.makedirs(output_folder, exist_ok=True)
+    # Create the output folder if it doesn't exist
+    os.makedirs(output_folder, exist_ok=True)
 
     # get list of sub fodlers in root folder
     folders = [f.path for f in os.scandir(image_folder) if f.is_dir()]
     folders.append(image_folder)
+
     for folder in folders:
         print(f"Processing directory: {folder}")
 
@@ -42,15 +44,17 @@ def process_images(image_folder, output_folder, barcode_column="barcode"):
 
         # If folder has different name with root folder, create output folder with same name in output folder
         if folder != image_folder:
-            changed_output_folder = os.path.join(
+            dynamic_output_folder = os.path.join(
                 output_folder, os.path.basename(folder)
             )
-            os.makedirs(changed_output_folder, exist_ok=True)
+            os.makedirs(dynamic_output_folder, exist_ok=True)
         else:
-            changed_output_folder = output_folder
+            dynamic_output_folder = output_folder
 
-        not_found_folder = os.path.join(changed_output_folder, "not_found")
-        os.makedirs(not_found_folder, exist_ok=True)
+        if worksheet:
+            # Create a 'not_found' folder to store images without a matching barcode
+            not_found_folder = os.path.join(dynamic_output_folder, "not_found")
+            os.makedirs(not_found_folder, exist_ok=True)
 
         # Prepare a list to track "not found" images
         not_found_images = []
@@ -84,33 +88,53 @@ def process_images(image_folder, output_folder, barcode_column="barcode"):
                             break
 
                 try:
-                    # Resize and prepare the image
+                    # Open the image and resize it
                     with Image.open(img_path) as img:
-                        img.load()  # Force loading of the image
+                        # Force loading of the image
+                        img.load()
+
+                        # Check if the image is in P mode with transparency
+                        if img.mode == "P" and "transparency" in img.info:
+                            # Convert to RGBA first if transparency exists
+                            img = img.convert("RGBA")
+                        elif img.mode == "P":
+                            # Convert to RGB if no transparency exists
+                            img = img.convert("RGB")
+
+                        # Convert RGBA to RGB for JPEG compatibility
+                        if img.mode == "RGBA":
+                            img = img.convert("RGB")
+
+                        # Convert to RGB if no transparency exists
                         img = img.resize((270, 300))
-                        if img.mode in ["P", "RGBA"]:
-                            img = img.convert("RGB")  # Convert to RGB if necessary
+
                 except Exception as e:
                     print(f"Error processing image {filename}: {e}")
                     continue
 
-                # Save the image
                 if found:
                     output_filename = f"{barcode}.jpg"
-                    img.save(
-                        os.path.join(changed_output_folder, output_filename), "JPEG"
-                    )
-                else:
+                    dynamic_output_folder = output_folder
+
+                elif worksheet:
                     output_filename = f"{file_basename}.jpg"
-                    img.save(os.path.join(not_found_folder, output_filename), "JPEG")
+                    dynamic_output_folder = not_found_folder
                     not_found_images.append(file_basename)
                     print(
                         f"Barcode not found for image {filename}. Saved as {output_filename}"
                     )
+                else:
+                    output_filename = filename
+
+                # Save the image
+                img.save(os.path.join(dynamic_output_folder, output_filename), "JPEG")
 
         # Create an Excel file for "not found" images
-        not_found_excel_path = os.path.join(not_found_folder, "not_found_images.xlsx")
-        create_not_found_excel(not_found_images, not_found_excel_path)
+        if worksheet:
+            not_found_excel_path = os.path.join(
+                not_found_folder, "not_found_images.xlsx"
+            )
+            create_not_found_excel(not_found_images, not_found_excel_path)
 
 
 def create_not_found_excel(image_names, output_excel_path):
